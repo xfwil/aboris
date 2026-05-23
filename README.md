@@ -18,6 +18,6 @@ getgenv().Params = {
     Folder = "Grow a Garden" -- Specify target output folder name here
 }
 
-local URL = "https://raw.githubusercontent.com/xfwil/aboris/main.lua"
+local URL = "https://raw.githubusercontent.com/xfwil/aboris/refs/heads/main/main.lua"
 loadstring(game:HttpGet(URL))()
 ```
