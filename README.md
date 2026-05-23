@@ -21,3 +21,15 @@ getgenv().Params = {
 local URL = "https://raw.githubusercontent.com/xfwil/aboris/refs/heads/main/main.lua"
 loadstring(game:HttpGet(URL))()
 ```
+
+## Known Issues
+
+We have problem when someone set a long folder name. Cause windows limit, maybe you can edit manual on regex.
+
+```sh
+Open Regedit -> Go this area
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem
+
+Find LongPathsEnabled, double click then change 0 to 1
+Restart ur pc.
+```
