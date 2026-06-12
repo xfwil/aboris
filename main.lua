@@ -11,15 +11,19 @@ local decompileFunc = decompile
 	end)
 	or nil
 
+local REMOTE_CLASSES = {
+	"RemoteEvent",
+	"RemoteFunction",
+	"BindableEvent",
+	"BindableFunction",
+	"UnreliableRemoteEvent",
+}
+
 local totalFoldersCreated = 0
 local totalFilesCreated = 0
 
 local function logMessage(msg)
-	if rconsoleprint then
-		rconsoleprint(msg .. "\n")
-	else
-		print(msg)
-	end
+	print(msg)
 end
 
 local function sanitizeName(name)
@@ -46,10 +50,62 @@ local function getScriptSource(scriptInstance)
 	return string.format("-- [Dump Error] Failed to read script source: %s", scriptInstance.Name)
 end
 
+local function isRemoteClass(instance)
+	for _, className in ipairs(REMOTE_CLASSES) do
+		if instance:IsA(className) then
+			return true
+		end
+	end
+	return false
+end
+
+local function collectRemotes(instance)
+	local remotes = {}
+	for _, child in pairs(instance:GetChildren()) do
+		if isRemoteClass(child) then
+			local className = child.ClassName
+			if not remotes[className] then
+				remotes[className] = {}
+			end
+			table.insert(remotes[className], child.Name)
+		end
+	end
+	return remotes
+end
+
+local function writeRemotesFile(remotes, folderPath)
+	local hasAny = false
+	for _ in pairs(remotes) do
+		hasAny = true
+		break
+	end
+	if not hasAny then
+		return
+	end
+
+	local lines = { "return {" }
+	for className, names in pairs(remotes) do
+		table.insert(lines, '\t' .. className .. ' = {')
+		for _, name in ipairs(names) do
+			table.insert(lines, '\t\t"' .. name .. '",')
+		end
+		table.insert(lines, "\t},")
+	end
+	table.insert(lines, "}")
+
+	writefile(folderPath .. "/_remotes.lua", table.concat(lines, "\n"))
+	totalFilesCreated = totalFilesCreated + 1
+end
+
 local function dumpStructure(instance, currentPath)
 	local name = sanitizeName(instance.Name)
 	local isScript = instance:IsA("LuaSourceContainer")
 	local hasKids = hasChildren(instance)
+
+	-- Skip remotes (they are collected separately by parent)
+	if isRemoteClass(instance) then
+		return
+	end
 
 	if not isScript and not hasKids then
 		return
@@ -70,6 +126,8 @@ local function dumpStructure(instance, currentPath)
 				totalFoldersCreated = totalFoldersCreated + 1
 				writefile(newFolderPath .. "/init.lua", sourceText)
 				totalFilesCreated = totalFilesCreated + 1
+
+				writeRemotesFile(collectRemotes(instance), newFolderPath)
 
 				for _, child in pairs(instance:GetChildren()) do
 					dumpStructure(child, newFolderPath)
@@ -106,6 +164,8 @@ local function dumpStructure(instance, currentPath)
 			makefolder(newFolderPath)
 			totalFoldersCreated = totalFoldersCreated + 1
 
+			writeRemotesFile(collectRemotes(instance), newFolderPath)
+
 			for _, child in pairs(instance:GetChildren()) do
 				dumpStructure(child, newFolderPath)
 			end
@@ -134,18 +194,9 @@ local function drawProgressBar(current, total, currentItemName)
 	local filledLength = math.floor((percent / 100) * barLength)
 	local bar = string.rep("█", filledLength) .. string.rep("░", barLength - filledLength)
 
-	local output =
-		string.format("\r[*] Progress: [%s] %d%% (%d/%d) | Current: %s", bar, percent, current, total, currentItemName)
-	if rconsoleprint then
-		rconsoleprint(output)
-	else
-		print(string.format("[*] Progress: %d%% - Extracting: %s", percent, currentItemName))
-	end
+	print(string.format("[*] Progress: [%s] %d%% (%d/%d) | Current: %s", bar, percent, current, total, currentItemName))
 end
 
-if rconsoleclear then
-	rconsoleclear()
-end
 logMessage("==========================================================")
 logMessage("                         Aboris                           ")
 logMessage("==========================================================")
@@ -163,14 +214,22 @@ pcall(function()
 	makefolder(FINAL_FOLDER)
 end)
 
+-- Collect remotes at root level of ReplicatedStorage
+writeRemotesFile(collectRemotes(RS), FINAL_FOLDER)
+
 local children = RS:GetChildren()
 local totalItems = #children
 
 for index, child in pairs(children) do
 	local shortName = #child.Name > 20 and string.sub(child.Name, 1, 17) .. "..." or child.Name
-	if rconsoleclear and index > 1 then
-		rconsoleprint("\r" .. string.rep(" ", 100) .. "\r")
+
+	-- Skip Assets folder
+	if child.Name:lower():find("assets") then
+		print(string.format("[*] Skipped: %s (%d/%d)", shortName, index, totalItems))
+		task.wait(0.01)
+		continue
 	end
+
 	drawProgressBar(index, totalItems, shortName)
 	dumpStructure(child, FINAL_FOLDER)
 	task.wait(0.01)
