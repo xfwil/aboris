@@ -76,6 +76,19 @@ local function isSkipped(name)
 	return false
 end
 
+-- Pass baca-saja: bentuk pohon asli, tidak terpengaruh flat mode atau kegagalan tulis
+local function buildTree(instance, depth, lines, skipped)
+	local line = string.rep("  ", depth) .. instance.Name .. " [" .. instance.ClassName .. "]"
+	if skipped then
+		table.insert(lines, line .. "  -- skipped")
+		return
+	end
+	table.insert(lines, line)
+	for _, child in ipairs(instance:GetChildren()) do
+		buildTree(child, depth + 1, lines, false)
+	end
+end
+
 local function hasChildren(instance)
 	return #instance:GetChildren() > 0
 end
@@ -268,6 +281,13 @@ end
 
 -- Collect remotes at root level of ReplicatedStorage
 writeRemotesFile(collectRemotes(RS), FINAL_FOLDER)
+
+local treeLines = { "ReplicatedStorage [ReplicatedStorage]" }
+for _, child in ipairs(RS:GetChildren()) do
+	buildTree(child, 1, treeLines, isSkipped(child.Name))
+end
+safeWrite(FINAL_FOLDER .. "/_tree.txt", table.concat(treeLines, "\n"))
+logMessage("[*] Tree written: " .. #treeLines .. " instances")
 
 local children = RS:GetChildren()
 local totalItems = #children
