@@ -1,5 +1,7 @@
 local Params = getgenv().Params or {}
 local GAME_FOLDER = Params.Folder or "GAG"
+local PATH_PREFIX_LEN = Params.PathPrefixLength or 60
+local SKIP_NAMES = Params.Skip or { "Assets" }
 
 local placeVersion = game.PlaceVersion or 0
 local FINAL_FOLDER = "HUKI/" .. GAME_FOLDER .. "_" .. tostring(placeVersion)
@@ -21,6 +23,9 @@ local REMOTE_CLASSES = {
 
 local totalFoldersCreated = 0
 local totalFilesCreated = 0
+local okScripts = 0
+local failedScripts = 0
+local errors = {}
 
 local function logMessage(msg)
 	print(msg)
@@ -28,6 +33,47 @@ end
 
 local function sanitizeName(name)
 	return name:gsub('[%\\%/%:%*%?%"%<%>%|]', "_")
+end
+
+-- Catat kegagalan ke daftar errors module-level agar bisa ditulis ke _errors.log di akhir
+local function logError(kind, path, detail)
+	local line = string.format("[%s] %s", kind, path)
+	if detail ~= nil then
+		line = line .. " -- " .. tostring(detail)
+	end
+	table.insert(errors, line)
+end
+
+-- Bungkus writefile dengan pcall supaya satu path yang gagal tidak menghentikan seluruh dump
+local function safeWrite(path, content)
+	local ok, err = pcall(writefile, path, content)
+	if ok then
+		totalFilesCreated = totalFilesCreated + 1
+		return true
+	end
+	logError("write", path, err)
+	return false
+end
+
+-- Bungkus makefolder dengan pcall, sama seperti safeWrite
+local function safeFolder(path)
+	local ok, err = pcall(makefolder, path)
+	if ok then
+		totalFoldersCreated = totalFoldersCreated + 1
+		return true
+	end
+	logError("folder", path, err)
+	return false
+end
+
+-- Cek nama persis (exact match) terhadap SKIP_NAMES, bukan substring
+local function isSkipped(name)
+	for _, skipName in ipairs(SKIP_NAMES) do
+		if name == skipName then
+			return true
+		end
+	end
+	return false
 end
 
 local function hasChildren(instance)
@@ -38,16 +84,28 @@ local function getScriptSource(scriptInstance)
 	if decompileFunc then
 		local success, res = pcall(decompileFunc, scriptInstance)
 		if success and type(res) == "string" and #res > 0 then
-			return res
+			return res, true
 		end
 	end
 	local success, res = pcall(function()
 		return scriptInstance.Source
 	end)
 	if success and type(res) == "string" and #res > 0 then
-		return res
+		return res, true
 	end
-	return string.format("-- [Dump Error] Failed to read script source: %s", scriptInstance.Name)
+	return string.format("-- [Dump Error] Failed to read script source: %s", scriptInstance.Name), false
+end
+
+-- Bungkus getScriptSource: hitung sukses/gagal dan catat path lengkap yang gagal
+local function dumpSource(scriptInstance)
+	local src, ok = getScriptSource(scriptInstance)
+	if ok then
+		okScripts = okScripts + 1
+	else
+		failedScripts = failedScripts + 1
+		logError("source", scriptInstance:GetFullName())
+	end
+	return src, ok
 end
 
 local function isRemoteClass(instance)
@@ -85,7 +143,7 @@ local function writeRemotesFile(remotes, folderPath)
 
 	local lines = { "return {" }
 	for className, names in pairs(remotes) do
-		table.insert(lines, '\t' .. className .. ' = {')
+		table.insert(lines, "\t" .. className .. " = {")
 		for _, name in ipairs(names) do
 			table.insert(lines, '\t\t"' .. name .. '",')
 		end
@@ -93,8 +151,7 @@ local function writeRemotesFile(remotes, folderPath)
 	end
 	table.insert(lines, "}")
 
-	writefile(folderPath .. "/_remotes.lua", table.concat(lines, "\n"))
-	totalFilesCreated = totalFilesCreated + 1
+	safeWrite(folderPath .. "/_remotes.lua", table.concat(lines, "\n"))
 end
 
 local function dumpStructure(instance, currentPath)
@@ -116,16 +173,14 @@ local function dumpStructure(instance, currentPath)
 	local currentPathLength = #currentPath + #name
 
 	if isScript then
-		local sourceText = getScriptSource(instance)
+		local sourceText = dumpSource(instance)
 
 		if hasKids then
 			if currentPathLength < 210 then
 				-- JALUR AMAN: Buat folder seperti biasa (Bisa tembus tingkat 5+ selama nama pendek)
 				local newFolderPath = currentPath .. "/" .. name
-				makefolder(newFolderPath)
-				totalFoldersCreated = totalFoldersCreated + 1
-				writefile(newFolderPath .. "/init.lua", sourceText)
-				totalFilesCreated = totalFilesCreated + 1
+				safeFolder(newFolderPath)
+				safeWrite(newFolderPath .. "/init.lua", sourceText)
 
 				writeRemotesFile(collectRemotes(instance), newFolderPath)
 
@@ -135,15 +190,13 @@ local function dumpStructure(instance, currentPath)
 			else
 				-- JALUR DARURAT: Path hampir menembus 260 karakter, aktifkan flat mode untuk sisanya
 				local flatName = name
-				writefile(currentPath .. "/" .. flatName .. ".init.lua", sourceText)
-				totalFilesCreated = totalFilesCreated + 1
+				safeWrite(currentPath .. "/" .. flatName .. ".init.lua", sourceText)
 
 				for _, child in pairs(instance:GetChildren()) do
 					local function dumpFlat(target, prefix)
 						local cName = sanitizeName(target.Name)
 						if target:IsA("LuaSourceContainer") then
-							writefile(currentPath .. "/" .. prefix .. "." .. cName .. ".lua", getScriptSource(target))
-							totalFilesCreated = totalFilesCreated + 1
+							safeWrite(currentPath .. "/" .. prefix .. "." .. cName .. ".lua", dumpSource(target))
 						end
 						for _, subChild in pairs(target:GetChildren()) do
 							dumpFlat(subChild, prefix .. "." .. cName)
@@ -154,15 +207,13 @@ local function dumpStructure(instance, currentPath)
 			end
 		else
 			local fileName = currentPath .. "/" .. name .. ".lua"
-			writefile(fileName, sourceText)
-			totalFilesCreated = totalFilesCreated + 1
+			safeWrite(fileName, sourceText)
 		end
 	else
 		if currentPathLength < 210 then
 			-- JALUR AMAN: Buat folder container biasa
 			local newFolderPath = currentPath .. "/" .. name
-			makefolder(newFolderPath)
-			totalFoldersCreated = totalFoldersCreated + 1
+			safeFolder(newFolderPath)
 
 			writeRemotesFile(collectRemotes(instance), newFolderPath)
 
@@ -175,8 +226,7 @@ local function dumpStructure(instance, currentPath)
 				local function dumpFlat(target, prefix)
 					local cName = sanitizeName(target.Name)
 					if target:IsA("LuaSourceContainer") then
-						writefile(currentPath .. "/" .. prefix .. "." .. cName .. ".lua", getScriptSource(target))
-						totalFilesCreated = totalFilesCreated + 1
+						safeWrite(currentPath .. "/" .. prefix .. "." .. cName .. ".lua", dumpSource(target))
 					end
 					for _, subChild in pairs(target:GetChildren()) do
 						dumpFlat(subChild, prefix .. "." .. cName)
@@ -223,8 +273,8 @@ local totalItems = #children
 for index, child in pairs(children) do
 	local shortName = #child.Name > 20 and string.sub(child.Name, 1, 17) .. "..." or child.Name
 
-	-- Skip Assets folder
-	if child.Name:lower():find("assets") then
+	-- Skip nama yang cocok persis dengan SKIP_NAMES (bukan substring)
+	if isSkipped(child.Name) then
 		print(string.format("[*] Skipped: %s (%d/%d)", shortName, index, totalItems))
 		task.wait(0.01)
 		continue
@@ -235,10 +285,20 @@ for index, child in pairs(children) do
 	task.wait(0.01)
 end
 
+-- Tulis error log mentah: pakai pcall(writefile,...) langsung, BUKAN safeWrite,
+-- karena safeWrite akan menambah ke errors -- yaitu list yang sedang kita tulis ini.
+if #errors > 0 then
+	pcall(writefile, FINAL_FOLDER .. "/_errors.log", table.concat(errors, "\n"))
+end
+
 logMessage("\n----------------------------------------------------------")
 logMessage("                     DUMP SUCCESS!                        ")
 logMessage("----------------------------------------------------------")
 logMessage("[✓] Output Directory : workspace/" .. FINAL_FOLDER)
 logMessage("[✓] Folders Created  : " .. totalFoldersCreated .. " directories")
 logMessage("[✓] Lua Files Created: " .. totalFilesCreated .. " files")
+logMessage("[✓] Scripts          : " .. okScripts .. " ok, " .. failedScripts .. " failed")
+if #errors > 0 then
+	logMessage("[!] Errors           : " .. #errors .. " -- lihat _errors.log")
+end
 logMessage("==========================================================")
