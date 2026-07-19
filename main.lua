@@ -282,12 +282,18 @@ end
 -- Collect remotes at root level of ReplicatedStorage
 writeRemotesFile(collectRemotes(RS), FINAL_FOLDER)
 
+-- Tiap cabang atas di-pcall sendiri: satu instance bermasalah cuma menghilangkan
+-- cabangnya, tidak membatalkan seluruh dump
 local treeLines = { "ReplicatedStorage [ReplicatedStorage]" }
 for _, child in ipairs(RS:GetChildren()) do
-	buildTree(child, 1, treeLines, isSkipped(child.Name))
+	local ok, err = pcall(buildTree, child, 1, treeLines, isSkipped(child.Name))
+	if not ok then
+		table.insert(treeLines, "  " .. child.Name .. " [tree error] -- " .. tostring(err))
+		logError("tree", child.Name, err)
+	end
 end
 safeWrite(FINAL_FOLDER .. "/_tree.txt", table.concat(treeLines, "\n"))
-logMessage("[*] Tree written: " .. #treeLines .. " instances")
+logMessage("[*] Tree written: " .. #treeLines .. " lines")
 
 local children = RS:GetChildren()
 local totalItems = #children
