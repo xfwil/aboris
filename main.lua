@@ -257,12 +257,14 @@ logMessage("----------------------------------------------------------")
 logMessage("[*] Extracting asset structures, please wait...")
 logMessage("----------------------------------------------------------")
 
-pcall(function()
-	makefolder("HUKI")
-end)
-pcall(function()
-	makefolder(FINAL_FOLDER)
-end)
+-- Folder root: hanya dibuat kalau belum ada, supaya run berulang tidak
+-- mencatat error palsu di _errors.log
+if not isfolder("HUKI") then
+	safeFolder("HUKI")
+end
+if not isfolder(FINAL_FOLDER) then
+	safeFolder(FINAL_FOLDER)
+end
 
 -- Collect remotes at root level of ReplicatedStorage
 writeRemotesFile(collectRemotes(RS), FINAL_FOLDER)
