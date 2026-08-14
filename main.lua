@@ -44,8 +44,19 @@ local function logError(kind, path, detail)
 	table.insert(errors, line)
 end
 
+-- Yield berkala supaya walk rekursif yang panjang tidak kena watchdog 30 detik Roblox
+local sinceYield = 0
+local function breathe()
+	sinceYield = sinceYield + 1
+	if sinceYield >= 25 then
+		sinceYield = 0
+		task.wait()
+	end
+end
+
 -- Bungkus writefile dengan pcall supaya satu path yang gagal tidak menghentikan seluruh dump
 local function safeWrite(path, content)
+	breathe()
 	local ok, err = pcall(writefile, path, content)
 	if ok then
 		totalFilesCreated = totalFilesCreated + 1
@@ -84,6 +95,7 @@ local function buildTree(instance, depth, lines, skipped)
 		return
 	end
 	table.insert(lines, line)
+	breathe()
 	for _, child in ipairs(instance:GetChildren()) do
 		buildTree(child, depth + 1, lines, false)
 	end
@@ -111,6 +123,7 @@ end
 
 -- Bungkus getScriptSource: hitung sukses/gagal dan catat path lengkap yang gagal
 local function dumpSource(scriptInstance)
+	breathe()
 	local src, ok = getScriptSource(scriptInstance)
 	if ok then
 		okScripts = okScripts + 1
@@ -168,6 +181,7 @@ local function writeRemotesFile(remotes, folderPath)
 end
 
 local function dumpStructure(instance, currentPath)
+	breathe()
 	local name = sanitizeName(instance.Name)
 	local isScript = instance:IsA("LuaSourceContainer")
 	local hasKids = hasChildren(instance)
